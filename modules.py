@@ -196,23 +196,121 @@ class WriteUnit(nn.Module):
 
         return _m
 
-## Testing
-B = 2
-d = 6
-merge_transform = nn.Linear(2*d,d)
+# ## Testing
+# B = 2
+# d = 6
+# merge_transform = nn.Linear(2*d,d)
 
-self_attn = True # False #
-attn_weight = nn.Linear(d,1)
-attn_merge = nn.Linear(2*d, d)
+# self_attn = True # False #
+# attn_weight = nn.Linear(d,1)
+# attn_merge = nn.Linear(2*d, d)
 
-mem_gate = True # False #
-gate_transform = nn.Linear(d,d)
+# mem_gate = True # False #
+# gate_transform = nn.Linear(d,d)
 
-model = WriteUnit(d, merge_transform, self_attn, attn_weight, attn_merge, mem_gate, gate_transform)
+# model = WriteUnit(d, merge_transform, self_attn, attn_weight, attn_merge, mem_gate, gate_transform)
 
-m_new = Variable(torch.rand(B,d))
-m_prev = Variable(torch.rand(B,d))
-ls_c_i = [Variable(torch.rand(B,d)) for _ in range(10)]
+# m_new = Variable(torch.rand(B,d))
+# m_prev = Variable(torch.rand(B,d))
+# ls_c_i = [Variable(torch.rand(B,d)) for _ in range(10)]
 
-m = model(m_new, m_prev, ls_c_i)
-print m.size()
+# m = model(m_new, m_prev, ls_c_i)
+# print m.size()
+
+
+class MACCell(nn.Module):
+
+    def __init__(self, d, ctrl_params, read_params, write_params):
+        """
+        Memory, Attention, and Control (MAC) cell
+
+        Input:
+        self_attn          -    boolean flag for self attention variant
+        mem_gate           -    boolean flag for memory gate variant
+        """
+        super(MACCell, self).__init__()
+        self.d = d
+
+        # Initialize units
+        self.control_unit = ControlUnit(**ctrl_params)
+        self.read_unit = ReadUnit(**read_params)
+        self.write_unit = WriteUnit(**write_params)
+
+    def forward(self, ls_c_i, m_prev, q, cws, KB):
+        """
+        Input:
+        ls_c_i      -    [B x d] x (i-1)  list of previous control vectors, --EXcluding-- current c_i
+        m_prev      -    B x d            previous memory state vector
+        q           -    B x d            concatenation of the two final hidden states in biLSTM
+        cws         -    B x d x S        contextual words from input unit, where S is the query length
+        KB          -    B x d x H x W    knowledge base (image feature map for VQA)
+
+        Return:
+        ls_c_i      -    [B x d] x i      list of previous control vectors, --INcluding-- current c_i
+        _m          -    B x d            new memory state vector
+        """
+        c_prev = ls_c_i[-1]
+        c_i = self.control_unit(c_prev, q, cws)
+        ls_c_i.append(c_i)
+
+        m_new = self.read_unit(m_prev, KB, c_i)
+
+        _m = self.write_unit(m_new, m_prev, ls_c_i)
+        return ls_c_i, _m
+
+# ## Testing
+# B = 2 # batch size
+# d = 6 # dimension
+# S = 5 # seq length
+# H, W = 14, 14
+
+# lstm = nn.LSTM(
+#         input_size = 1,
+#         hidden_size = d // 2,
+#         num_layers = 1,
+#         bidirectional = True,
+#     )
+
+# inpt = Variable( torch.rand(S, B, 1) )
+# out, (h_t, c_t) = lstm(inpt)
+
+# # must call .contiguous() because the tensor is not a single block of memory, but a block with holes. view can be only used with contiguous tensors.
+# q = h_t.permute(1,0,2).contiguous().view(B, -1)
+# cws = out.permute(1,2,0)
+
+# ls_c_i = [Variable(torch.rand(B,d)) for _ in range(10)]
+# m_prev = Variable(torch.rand(B,d))
+
+# KB = Variable(torch.rand(B,d,H,W))
+
+# ctrl_params = {
+#     'd':d,
+#     'transform':nn.Linear(2*d, d),
+#     'attn_weight':nn.Linear(d, 1),
+# }
+
+# read_params = {
+#     'd':d,
+#     'm_prev_transform':nn.Linear(d,d),
+#     'KB_transform':nn.Linear(d,d),
+#     'merge_transform':nn.Linear(2*d,d),
+#     'attn_weight':nn.Linear(d,1),
+# }
+
+# write_params = {
+#     'd':d,
+#     'merge_transform':nn.Linear(2*d,d),
+#     'self_attn':True,
+#     'attn_weight':nn.Linear(d,1),
+#     'attn_merge':nn.Linear(2*d, d),
+#     'mem_gate':True,
+#     'gate_transform':nn.Linear(d,d),
+# }
+
+# model = MACCell(d, ctrl_params, read_params, write_params)
+# ls_c_i, _m = model(ls_c_i, m_prev, q, cws, KB)
+
+# print len(ls_c_i)
+# for item in ls_c_i:
+#     print item.size()
+# print _m.size()
