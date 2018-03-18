@@ -320,3 +320,42 @@ class MACCell(nn.Module):
 #     print item.size()
 # print _m.size()
 
+
+class InputUnit(nn.Module):
+
+    def __init__(self):
+        """
+
+        """
+        super(InputUnit, self).__init__()
+
+    def forward(self):
+        """
+        """
+        pass
+
+class OutputUnit(nn.Module):
+
+    def __init__(self):
+        """
+
+        """
+        super(OutputUnit, self).__init__()
+
+    def forward(self):
+        """
+        """
+        pass
+
+class CAN(nn.Module):
+
+    def __init__(self):
+        """
+        Compositional Attention Network
+        """
+        super(CAN, self).__init__()
+
+    def forward(self):
+        """
+        """
+        pass
