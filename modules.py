@@ -83,7 +83,7 @@ class ReadUnit(nn.Module):
         Input:
         m_prev_transform   -    shared W^{d,d} and b^d that transforms m_prev into m'_prev (Section 3.2.2 Eq.(4))
         KB_transform       -    shared W^{d,d} and b^d that transforms each hypercolumn KB_hw into KB'_hw (Section 3.2.2 Eq.(5a))
-        merge_transform    -    shared W^{2d,d} and b^d that transforms merged hypercolumn [I_hw; KB_hw] into I'_hw (Section 3.2.2 Eq.(6a))
+        merge_transform    -    shared W^{2d,d} and b^d that transforms concatenated hypercolumn [I_hw; KB_hw] into I'_hw (Section 3.2.2 Eq.(6a))
         attn_weight        -    shared W^{d,1} and b^1 that calculate attentional weights (Section 3.2.2 Eq.(7a))
         """
         super(ReadUnit, self).__init__()
@@ -124,20 +124,95 @@ class ReadUnit(nn.Module):
         m_new = torch.sum(m_new.view(B,-1,d), dim=1) # anchor on knowledge base
         return m_new
 
+# ## Testing
+# B = 2
+# d = 6
+# H, W = 14, 14
+# m_prev_transform = nn.Linear(d,d)
+# KB_transform = nn.Linear(d,d)
+# merge_transform = nn.Linear(2*d,d)
+# attn_weight = nn.Linear(d,1)
+
+# model = ReadUnit(d, m_prev_transform, KB_transform, merge_transform, attn_weight)
+
+# m_prev = Variable(torch.rand(B,d))
+# KB = Variable(torch.rand(B,d,H,W))
+# c_i = Variable(torch.rand(B,d))
+
+# m_new = model(m_prev, KB, c_i)
+# print m_new.size()
+
+class WriteUnit(nn.Module):
+
+    def __init__(self, d, merge_transform, self_attn=False, attn_weight=None, attn_merge=None, mem_gate=False, gate_transform=None):
+        """
+        Input:
+        merge_transform    -    shared W^{2d,d} and b^d that transforms concatenated memory vec [m_new; m_prev] into m (Section 3.2.3 Eq.(8))
+
+        self_attn          -    boolean flag for self attention variant
+        attn_weight        -    shared W^{d,1} and b^1 that calculate attentional weights (Section 3.2.3 Eq.(9a))
+        attn_merge         -    shared W^{2d,d} and b^d that transforms concatenated memory vec [m_sa; m] into _m (Section 3.2.3 Eq.(10))
+
+        mem_gate           -    boolean flag for memory gate variant
+        gate_transform     -    shared W^{d,d} and b^d that transforms c_i in to _c_i for gating purpose
+        """
+        super(WriteUnit, self).__init__()
+        self.d = d
+        self.merge_transform = merge_transform
+
+        self.self_attn = self_attn
+        self.attn_weight = attn_weight
+        self.attn_merge = attn_merge
+
+        self.mem_gate = mem_gate
+        self.gate_transform = gate_transform
+
+    def forward(self, m_new, m_prev, ls_c_i=None):
+        """
+        Input:
+        m_new       -    B x d            information vector retrieved by read unit
+        m_prev      -    B x d            previous memory state vector
+        ls_c_i      -    [B x d] x i      list of previous control vectors, including current c_i
+
+        Return:
+        _m          -    B x d            new memory state vector
+        """
+        _m = self.merge_transform(torch.cat([m_new, m_prev], dim=1))
+
+        if self.self_attn:
+            c_i = ls_c_i[-1].unsqueeze(2)
+            c_prevs = torch.stack(ls_c_i[:-1], dim=2)
+            sa = c_i * c_prevs  # B x d x (i-1)
+            sa = sa.permute(0,2,1).contiguous().view(-1, self.d)
+            sa = self.attn_weight(sa).view(c_i.size(0), -1).unsqueeze(1) # B x 1 x (i-1)
+            m_sa = torch.sum(sa * c_prevs, dim=2)
+
+            _m = self.attn_merge(torch.cat([m_sa, _m], dim=1))
+
+        if self.mem_gate:
+            c_i = ls_c_i[-1]
+            _c_i = torch.sigmoid(self.gate_transform(c_i))
+            _m = _c_i * m_prev + (1. - _c_i) * _m
+
+        return _m
+
 ## Testing
 B = 2
 d = 6
-H, W = 14, 14
-m_prev_transform = nn.Linear(d,d)
-KB_transform = nn.Linear(d,d)
 merge_transform = nn.Linear(2*d,d)
+
+self_attn = True # False #
 attn_weight = nn.Linear(d,1)
+attn_merge = nn.Linear(2*d, d)
 
-model = ReadUnit(d, m_prev_transform, KB_transform, merge_transform, attn_weight)
+mem_gate = True # False #
+gate_transform = nn.Linear(d,d)
 
+model = WriteUnit(d, merge_transform, self_attn, attn_weight, attn_merge, mem_gate, gate_transform)
+
+m_new = Variable(torch.rand(B,d))
 m_prev = Variable(torch.rand(B,d))
-KB = Variable(torch.rand(B,d,H,W))
-c_i = Variable(torch.rand(B,d))
+ls_c_i = [Variable(torch.rand(B,d)) for _ in range(10)]
 
-m_new = model(m_prev, KB, c_i)
-print m_new.size()
+m = model(m_new, m_prev, ls_c_i)
+print m.size()
