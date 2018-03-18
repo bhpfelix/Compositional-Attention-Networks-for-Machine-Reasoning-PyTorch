@@ -3,6 +3,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd import Variable
 
+__author__ = 'Haoping Bai'
+__copyright__ = 'Copyright (c) 2018, Haoping Bai'
+__email__ = 'bhpfelix@gmail.com'
+__license__ = 'MIT'
+
 class ControlUnit(nn.Module):
 
     def __init__(self, d, transform, attn_weight):
@@ -314,3 +319,4 @@ class MACCell(nn.Module):
 # for item in ls_c_i:
 #     print item.size()
 # print _m.size()
+
