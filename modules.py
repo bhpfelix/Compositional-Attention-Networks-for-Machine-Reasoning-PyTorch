@@ -17,5 +17,15 @@ class ControlUnit(nn.Module):
         c_prev:          B x d        previous control vector
         cws:             B x d x S    contextual words from input unit, where S is the query length
         """
-        q
+        ## Question, if d is the output vector size of biLSTM, then the hidden state size of the biLSTM should be d/2 ?
         return x
+
+lstm = nn.LSTM(
+        input_size = 1,
+        hidden_size = 3,
+        num_layers = 1,
+        bidirectional = True,
+    )
+
+inpt = Variable( torch.rand(5, 2, 1) )
+print lstm(inpt)
