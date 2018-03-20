@@ -5,9 +5,10 @@ import torch
 from torch.autograd import Variable
 from torch.utils.data import Dataset, DataLoader
 
+import configs as cfgs
 
 class CLEVRDataset(Dataset):
-    def __init__(self, feature_h5, question_json, glove_json, answer_json, corpus='6B', d_pos_vec=128):
+    def __init__(self, feature_h5, question_json, glove_json, answer_json, corpus, d_pos_vec):
         """
         Image features are extracted according to:
         https://github.com/ethanjperez/film/blob/master/scripts/extract_features.py
@@ -69,18 +70,31 @@ class CLEVRDataset(Dataset):
 
         return img_feats, question, answer
 
-# ## Example Usage
 
-# dataset = CLEVRDataset(
-#     feature_h5='train.hdf5',
-#     question_json='/disk2/CLEVR_v1.0/questions/CLEVR_train_questions.json',
-#     glove_json='glove.json',
-#     answer_json='answers.json',
-#     corpus='6B',
-#     d_pos_vec=128
-# )
+train_dataset = CLEVRDataset(
+    feature_h5=cfgs.TRAIN_IM_FEATS,
+    question_json=cfgs.TRAIN_QUESTION,
+    glove_json=cfgs.GLOVE_PATH,
+    answer_json=cfgs.ANSWER_PATH,
+    corpus=cfgs.CORPUS,
+    d_pos_vec=cfgs.D_POS_VEC
+)
 
+val_dataset = CLEVRDataset(
+    feature_h5=cfgs.VAL_IM_FEATS,
+    question_json=cfgs.VAL_QUESTION,
+    glove_json=cfgs.GLOVE_PATH,
+    answer_json=cfgs.ANSWER_PATH,
+    corpus=cfgs.CORPUS,
+    d_pos_vec=cfgs.D_POS_VEC
+)
+
+## Example Usage
 # img_feats, question, answer = dataset[0]
 # print(img_feats.shape)
 # print(question.shape)
 # print(answer)
+
+train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=cfgs.BATCH_SIZE, shuffle=True)
+val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=cfgs.BATCH_SIZE)
+

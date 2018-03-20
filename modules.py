@@ -3,6 +3,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd import Variable
 
+import configs as cfgs
+
 __author__ = 'Haoping Bai'
 __copyright__ = 'Copyright (c) 2018, Haoping Bai'
 __email__ = 'bhpfelix@gmail.com'
@@ -487,8 +489,12 @@ class CAN(nn.Module):
         self.output_unit = OutputUnit(d, num_answers, out_hidden_size)
 
     def _init_states(self, B):
-        ls_c_i = [Variable(torch.rand(B,self.d))]
-        _m = Variable(torch.rand(B,self.d))
+        if cfgs.USE_CUDA:
+            ls_c_i = [Variable(torch.rand(B,self.d)).cuda()]
+            _m = Variable(torch.rand(B,self.d)).cuda()
+        else:
+            ls_c_i = [Variable(torch.rand(B,self.d))]
+            _m = Variable(torch.rand(B,self.d))
         return ls_c_i, _m
 
     def forward(self, img_feats, question):
