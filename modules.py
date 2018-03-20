@@ -323,16 +323,67 @@ class MACCell(nn.Module):
 
 class InputUnit(nn.Module):
 
-    def __init__(self):
+    def __init__(self, d, in_channels, hidden_channels):
         """
-
+        Input:
+        in_channels          -    image feature input channels
+        hidden_channels      -    feature map channel after the first convolution layer
         """
         super(InputUnit, self).__init__()
+        if d%2 == 1:
+            raise ValueError('d needs to be an even integer')
+        self.d = d
+        self.lstm = nn.LSTM(
+                input_size = 300, # GloVe dimension
+                hidden_size = d // 2,
+                num_layers = 1,
+                bidirectional = True,
+            )
+        self.conv1 = nn.Conv2d(in_channels, hidden_channels, 2, padding=1) # Use 1 padding here to keep the dimension
+        self.conv2 = nn.Conv2d(hidden_channels, d, 2)
 
-    def forward(self):
+        self.ac = nn.ELU()
+
+    def forward(self, img_feats, question):
         """
+        Input:
+        img_feats      -    B x (C+2*Pd) x H x W       image feature maps, where C is 1024 (ResNet101 conv4 output feature map number), and Pd is positional encoding dimension
+        question       -    B x S x 300                question in 300 dimensional GloVe embedding, where S is the query length
+
+
+        Return:
+        q           -    B x d            concatenation of the two final hidden states in biLSTM
+        cws         -    B x d x S        contextual words from input unit, where S is the query length
+        KB          -    B x d x H x W    knowledge base (image feature map for VQA)
         """
-        pass
+
+        out, (h_t, c_t) = self.lstm(question.permute(1,0,2))
+        # must call .contiguous() because the tensor is not a single block of memory, but a block with holes. view can be only used with contiguous tensors.
+        q = h_t.permute(1,0,2).contiguous().view(B, -1)
+        cws = out.permute(1,2,0)
+
+        KB = self.ac(self.conv1(img_feats))
+        KB = self.ac(self.conv2(KB))
+
+        return q, cws, KB
+
+# ## Testing
+# B = 2
+# d = 6
+# H, W = 14, 14
+# S = 5
+# in_channels = 1280
+# hidden_channels = (in_channels + d) // 2
+
+# img_feats = Variable( torch.rand(B, in_channels, H, W) )
+# question = Variable( torch.rand(B, S, 300) )
+
+# model = InputUnit(d, in_channels, hidden_channels)
+# q, cws, KB = model(img_feats, question)
+# print q.size()
+# print cws.size()
+# print KB.size()
+
 
 class OutputUnit(nn.Module):
 
