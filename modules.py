@@ -433,13 +433,90 @@ class OutputUnit(nn.Module):
 
 class CAN(nn.Module):
 
-    def __init__(self):
+    def __init__(self, d, input_in_channels, input_hidden_channels=None, p=12, write_self_attn=True, write_mem_gate=True, num_answers=28, out_hidden_size=None):
         """
         Compositional Attention Network
+
+        Input:
+        d  -
+        p  -
         """
         super(CAN, self).__init__()
+        self.d = d
 
-    def forward(self):
+        self.input_unit = InputUnit(d, input_in_channels, input_hidden_channels)
+
+        self.ctrl_transform = nn.Linear(2*d, d)
+        self.ctrl_attn_weight = nn.Linear(d, 1)
+        ctrl_params = {
+            'd':d,
+            'transform':self.ctrl_transform,
+            'attn_weight':self.ctrl_attn_weight,
+        }
+
+        self.read_m_prev_transform = nn.Linear(d,d)
+        self.read_KB_transform = nn.Linear(d,d)
+        self.read_merge_transform = nn.Linear(2*d,d)
+        self.read_attn_weight = nn.Linear(d,1)
+        read_params = {
+            'd':d,
+            'm_prev_transform':self.read_m_prev_transform,
+            'KB_transform':self.read_KB_transform,
+            'merge_transform':self.read_merge_transform,
+            'attn_weight':self.read_attn_weight,
+        }
+
+        self.write_merge_transform = nn.Linear(2*d,d)
+        self.write_self_attn = write_self_attn
+        self.write_attn_weight = nn.Linear(d,1)
+        self.write_attn_merge = nn.Linear(2*d, d)
+        self.write_mem_gate = write_mem_gate
+        self.write_gate_transform = nn.Linear(d,d)
+        write_params = {
+            'd':d,
+            'merge_transform':self.write_merge_transform,
+            'self_attn':self.write_self_attn,
+            'attn_weight':self.write_attn_weight,
+            'attn_merge':self.write_attn_merge,
+            'mem_gate':self.write_mem_gate,
+            'gate_transform':self.write_gate_transform,
+        }
+
+        self.MACCells = nn.ModuleList([MACCell(d, ctrl_params, read_params, write_params) for _ in range(p)])
+
+        self.output_unit = OutputUnit(d, num_answers, out_hidden_size)
+
+    def _init_states(self, B):
+        ls_c_i = [Variable(torch.rand(B,self.d))]
+        _m = Variable(torch.rand(B,self.d))
+        return ls_c_i, _m
+
+    def forward(self, img_feats, question):
         """
+        Input:
+        img_feats      -    B x (C+2*Pd) x H x W       image feature maps, where C is 1024 (ResNet101 conv4 output feature map number), and Pd is positional encoding dimension
+        question       -    B x S x 300                question in 300 dimensional GloVe embedding, where S is the query length
+
+        Return:
+        ans         -    B x num_answers      softmax score over the answers
         """
-        pass
+        q, cws, KB = self.input_unit(img_feats, question)
+        ls_c_i, _m = self._init_states(q.size(0))
+        for mac in self.MACCells:
+            ls_c_i, _m = mac(ls_c_i, _m, q, cws, KB)
+        ans = self.output_unit(q, _m)
+        return ans
+
+# ## Testing
+# B = 4
+# d = 60
+# H, W = 14, 14
+# S = 5
+# in_channels = 1280
+
+# img_feats = Variable( torch.rand(B, in_channels, H, W) )
+# question = Variable( torch.rand(B, S, 300) )
+
+# model = CAN(d, input_in_channels=in_channels, input_hidden_channels=None, p=12, write_self_attn=True, write_mem_gate=True, num_answers=28, out_hidden_size=None)
+# ans = model(img_feats, question)
+# print ans.size()
