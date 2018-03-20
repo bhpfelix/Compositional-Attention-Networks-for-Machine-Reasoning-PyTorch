@@ -8,6 +8,10 @@ from torch.utils.data import Dataset, DataLoader
 
 class CLEVRDataset(Dataset):
     def __init__(self, feature_h5, question_json, glove_json, answer_json, corpus='6B', d_pos_vec=128):
+        """
+        Image features are extracted according to:
+        https://github.com/ethanjperez/film/blob/master/scripts/extract_features.py
+        """
         print('Loading data...')
         f = h5py.File(feature_h5, 'r')
         self.image_features = f['features']
