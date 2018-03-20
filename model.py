@@ -336,7 +336,7 @@ class InputUnit(nn.Module):
             raise ValueError('d needs to be an even integer')
         self.d = d
         self.lstm = nn.LSTM(
-                input_size = 300, # GloVe dimension
+                input_size = 300 + 1, # GloVe dimension + padding channel (Double check how to handdle variable length input)
                 hidden_size = d // 2,
                 num_layers = 1,
                 bidirectional = True,
@@ -352,7 +352,7 @@ class InputUnit(nn.Module):
         """
         Input:
         img_feats      -    B x (C+2*Pd) x H x W       image feature maps, where C is 1024 (ResNet101 conv4 output feature map number), and Pd is positional encoding dimension
-        question       -    B x S x 300                question in 300 dimensional GloVe embedding, where S is the query length
+        question       -    B x S x (300+1)                question in 300 dimensional GloVe embedding, where S is the query length
 
 
         Return:
@@ -360,7 +360,7 @@ class InputUnit(nn.Module):
         cws         -    B x d x S        contextual words from input unit, where S is the query length
         KB          -    B x d x H x W    knowledge base (image feature map for VQA)
         """
-
+        B = question.size(0)
         out, (h_t, c_t) = self.lstm(question.permute(1,0,2))
         # must call .contiguous() because the tensor is not a single block of memory, but a block with holes. view can be only used with contiguous tensors.
         q = h_t.permute(1,0,2).contiguous().view(B, -1)
@@ -526,3 +526,11 @@ class CAN(nn.Module):
 # model = CAN(d, input_in_channels=in_channels, input_hidden_channels=None, p=12, write_self_attn=True, write_mem_gate=True, num_answers=28, out_hidden_size=None)
 # ans = model(img_feats, question)
 # print ans.size()
+
+
+# ## initialize model
+# def get_can(resume=False, resume_path=None):
+#     model = CAN(**cfgs.NET_PARAM)
+#     if cfgs.USE_CUDA:
+#         model.cuda()
+#     return model

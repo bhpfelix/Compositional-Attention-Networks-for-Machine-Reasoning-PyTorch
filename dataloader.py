@@ -62,7 +62,7 @@ class CLEVRDataset(Dataset):
         q = self.questions[index]
         question = self.question_to_embedding(q['question'])
         answer = self.answers.index(q['answer'])
-        img_feats = self.image_features[index]
+        img_feats = self.image_features[q['image_index']]
         if self.pos_code is None:
             _, H, W = img_feats.shape
             self.pos_code = self.pos_encode_block(H, W)
@@ -70,6 +70,38 @@ class CLEVRDataset(Dataset):
 
         return img_feats, question, answer
 
+def collate_fn(data):
+    """Creates mini-batch tensors from the list of tuples (img_feats, question, answer).
+
+    We should build custom collate_fn rather than using default collate_fn,
+    because merging question (including padding) is not supported in default.
+    Args:
+        data: list of tuple (img_feats, question, answer).
+            - img_feats: torch tensor of shape (C, H, W).
+            - question: torch tensor of shape (S, 300); variable length S.
+            - answer: int
+    Returns:
+        im_batch: torch tensor of shape (batch_size, C, H, W).
+        q_batch: torch tensor of shape (batch_size, padded_length, 300+1).
+        a_batch: torch tensor of shape (batch_size, 1).
+        lengths: list; valid length for each padded question.
+    """
+    # Sort a data list by question length (descending order).
+    data.sort(key=lambda x: x[1].shape[0], reverse=True)
+    img_feats, question, answer = zip(*data)
+
+    # Merge images (from tuple of 3D tensor to 4D tensor).
+    im_batch = torch.stack([torch.Tensor(feat).float() for feat in img_feats], 0)
+    a_batch = torch.Tensor(answer)
+
+    # Merge captions (from tuple of 2D tensor to 3D tensor).
+    lengths = [q.shape[0] for q in question]
+    q_batch = torch.zeros(len(question), max(lengths), question[0].shape[1]+1).float() # +1 for padding channel
+    for i, q in enumerate(question):
+        q_batch[i, :lengths[i], :-1] = torch.Tensor(q).float()
+        if lengths[i] < max(lengths):
+            q_batch[i, lengths[i]:, -1] = 1.
+    return im_batch, q_batch, a_batch # , lengths
 
 train_dataset = CLEVRDataset(
     feature_h5=cfgs.TRAIN_IM_FEATS,
@@ -95,6 +127,6 @@ val_dataset = CLEVRDataset(
 # print(question.shape)
 # print(answer)
 
-train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=cfgs.BATCH_SIZE, shuffle=True)
-val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=cfgs.BATCH_SIZE)
+train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=cfgs.BATCH_SIZE, shuffle=True, collate_fn=collate_fn)
+val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=cfgs.BATCH_SIZE, collate_fn=collate_fn)
 
