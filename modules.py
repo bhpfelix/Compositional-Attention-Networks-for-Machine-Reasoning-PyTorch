@@ -323,7 +323,7 @@ class MACCell(nn.Module):
 
 class InputUnit(nn.Module):
 
-    def __init__(self, d, in_channels, hidden_channels):
+    def __init__(self, d, in_channels, hidden_channels=None):
         """
         Input:
         in_channels          -    image feature input channels
@@ -339,6 +339,8 @@ class InputUnit(nn.Module):
                 num_layers = 1,
                 bidirectional = True,
             )
+        if hidden_channels is None:
+            hidden_channels = (in_channels + d) // 2
         self.conv1 = nn.Conv2d(in_channels, hidden_channels, 2, padding=1) # Use 1 padding here to keep the dimension
         self.conv2 = nn.Conv2d(hidden_channels, d, 2)
 
@@ -387,16 +389,47 @@ class InputUnit(nn.Module):
 
 class OutputUnit(nn.Module):
 
-    def __init__(self):
+    def __init__(self, d, num_answers=28, hidden_size=None):
         """
-
+        Input:
+        num_answers          -    number of all possible answers, for CLEVR, is 28
         """
         super(OutputUnit, self).__init__()
+        if hidden_size is None:
+            hidden_size = (2*d + num_answers) // 2
+        self.fc1 = nn.Linear(2*d, hidden_size)
+        self.fc2 = nn.Linear(hidden_size, num_answers)
 
-    def forward(self):
+        self.ac = nn.ELU()
+        # Double check where to apply dropout, the paper did not state
+        self.dropout = nn.Dropout(p=0.85)
+        self.softmax = nn.Softmax(dim=1)
+
+    def forward(self, q, mp):
         """
+        Input:
+        q           -    B x d                question repr, concatenation of the two final hidden states in biLSTM
+        mp          -    B x d                memory state vector from the last MAC Cell
+
+        Return:
+        ans         -    B x num_answers      softmax score over the answers
         """
-        pass
+        ans = torch.cat([q, mp], dim=1)
+        ans = self.dropout(self.ac(self.fc1(ans)))
+        ans = self.softmax(self.ac(self.fc2(ans)))
+        return ans
+
+# ## Testing
+# B = 2
+# d = 6
+
+# q = Variable(torch.rand(B,d))
+# mp = Variable(torch.rand(B,d))
+
+# model = OutputUnit(d)
+# ans = model(q, mp)
+# print ans.size()
+
 
 class CAN(nn.Module):
 
