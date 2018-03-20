@@ -21,7 +21,7 @@ __copyright__ = 'Copyright (c) 2018, Haoping Bai'
 __email__ = 'bhpfelix@gmail.com'
 __license__ = 'MIT'
 
-def build_dataset(CLEVR_root, glove_path):
+def build_dataset(CLEVR_root, glove_dict_path):
 
     return None
 
