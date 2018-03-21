@@ -127,6 +127,6 @@ val_dataset = CLEVRDataset(
 # print(question.shape)
 # print(answer)
 
-train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=cfgs.BATCH_SIZE, shuffle=True, collate_fn=collate_fn)
+train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=cfgs.BATCH_SIZE, shuffle=True, collate_fn=collate_fn) #
 val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=cfgs.BATCH_SIZE, collate_fn=collate_fn)
 

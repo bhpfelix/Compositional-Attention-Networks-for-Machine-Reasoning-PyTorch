@@ -116,18 +116,20 @@ class ReadUnit(nn.Module):
 
         _m_prev = self.m_prev_transform(m_prev).unsqueeze(1).unsqueeze(1)
         B, d, H, W = KB.size()
-        KB = KB.permute(0,2,3,1) # B x H x W x d
-        _KB = KB.contiguous().view(-1,self.d)
+        KB_perm = KB.permute(0,2,3,1) # B x H x W x d
+        _KB = KB_perm.contiguous().view(-1,self.d)
         _KB = self.KB_transform(_KB).view(B, H, W, d)
         I = _m_prev * _KB # B x H x W x d
 
-        _I = torch.cat([I, KB], dim=3).view(-1, 2*self.d)
+        _I = torch.cat([I, KB_perm], dim=3).view(-1, 2*self.d)
         _I = self.merge_transform(_I).view(B, H, W, d)
         I = c_i.unsqueeze(1).unsqueeze(1) * _I
 
-        mv = self.attn_weight(I.view(-1, self.d)).view(B, H, W, 1)
+        mv = self.softmax(self.attn_weight(I.view(-1, self.d)).view(B, -1)).view(B, H, W, 1)
+#         print("mv sum: ")
+#         print(torch.sum(mv))
 
-        m_new = mv * KB
+        m_new = mv * KB_perm
         m_new = torch.sum(m_new.view(B,-1,d), dim=1) # anchor on knowledge base
         return m_new
 
@@ -151,14 +153,13 @@ class ReadUnit(nn.Module):
 
 class WriteUnit(nn.Module):
 
-    def __init__(self, d, merge_transform, self_attn=False, attn_weight=None, attn_merge=None, mem_gate=False, gate_transform=None):
+    def __init__(self, d, merge_transform, self_attn=False, attn_weight=None, mem_gate=False, gate_transform=None):
         """
         Input:
-        merge_transform    -    shared W^{2d,d} and b^d that transforms concatenated memory vec [m_new; m_prev] into m (Section 3.2.3 Eq.(8))
+        merge_transform    -    shared W^{2d,d} and b^d that transforms concatenated memory vec [m_new; m_prev] into m (Section 3.2.3 Eq.(8) or Section 3.2.3 Eq.(10) if self_attn is True)
 
         self_attn          -    boolean flag for self attention variant
         attn_weight        -    shared W^{d,1} and b^1 that calculate attentional weights (Section 3.2.3 Eq.(9a))
-        attn_merge         -    shared W^{2d,d} and b^d that transforms concatenated memory vec [m_sa; m] into _m (Section 3.2.3 Eq.(10))
 
         mem_gate           -    boolean flag for memory gate variant
         gate_transform     -    shared W^{d,d} and b^d that transforms c_i in to _c_i for gating purpose
@@ -169,39 +170,46 @@ class WriteUnit(nn.Module):
 
         self.self_attn = self_attn
         self.attn_weight = attn_weight
-        self.attn_merge = attn_merge
 
         self.mem_gate = mem_gate
         self.gate_transform = gate_transform
 
-    def forward(self, m_new, m_prev, ls_c_i=None):
+        self.softmax = nn.Softmax(dim=1)
+
+    def forward(self, m_new, ls_m_i, c_i, ls_c_i):
         """
         Input:
-        m_new       -    B x d            information vector retrieved by read unit
-        m_prev      -    B x d            previous memory state vector
-        ls_c_i      -    [B x d] x i      list of previous control vectors, including current c_i
+        m_new       -    B x d                information vector retrieved by read unit
+        ls_m_i      -    [B x d] x (i-1)      list of previous memory vectors, excluding current m_new
+        c_i         -    B x d                current control vec
+        ls_c_i      -    [B x d] x (i-1)      list of previous control vectors, excluding current c_i
 
         Return:
-        _m          -    B x d            new memory state vector
+        ls_m_i      -    [B x d] x (i-1)      list of memory vectors, including current _m
+        ls_c_i      -    [B x d] x (i-1)      list of control vectors, including current c_i
         """
-        _m = self.merge_transform(torch.cat([m_new, m_prev], dim=1))
+        m_prev = ls_m_i[-1]
 
         if self.self_attn:
-            c_i = ls_c_i[-1].unsqueeze(2)
-            c_prevs = torch.stack(ls_c_i[:-1], dim=2)
-            sa = c_i * c_prevs  # B x d x (i-1)
+            m_prevs = torch.stack(ls_m_i, dim=2)
+            c_prevs = torch.stack(ls_c_i, dim=2)
+            sa = c_i.unsqueeze(2) * c_prevs  # B x d x (i-1)
             sa = sa.permute(0,2,1).contiguous().view(-1, self.d)
-            sa = self.attn_weight(sa).view(c_i.size(0), -1).unsqueeze(1) # B x 1 x (i-1)
-            m_sa = torch.sum(sa * c_prevs, dim=2)
-
-            _m = self.attn_merge(torch.cat([m_sa, _m], dim=1))
+            sa = self.softmax(self.attn_weight(sa).view(c_i.size(0), -1)).unsqueeze(1) # B x 1 x (i-1)
+            m_sa = torch.sum(sa * m_prevs, dim=2)
+            # incoporating new info with old info
+            _m = self.merge_transform(torch.cat([m_new, m_sa], dim=1))
+        else:
+            _m = self.merge_transform(torch.cat([m_new, m_prev], dim=1))
 
         if self.mem_gate:
-            c_i = ls_c_i[-1]
             _c_i = torch.sigmoid(self.gate_transform(c_i))
             _m = _c_i * m_prev + (1. - _c_i) * _m
 
-        return _m
+        ls_c_i.append(c_i)
+        ls_m_i.append(_m)
+
+        return ls_c_i, ls_m_i
 
 # ## Testing
 # B = 2
@@ -243,11 +251,11 @@ class MACCell(nn.Module):
         self.read_unit = ReadUnit(**read_params)
         self.write_unit = WriteUnit(**write_params)
 
-    def forward(self, ls_c_i, m_prev, q, cws, KB):
+    def forward(self, ls_c_i, ls_m_i, q, cws, KB):
         """
         Input:
         ls_c_i      -    [B x d] x (i-1)  list of previous control vectors, --EXcluding-- current c_i
-        m_prev      -    B x d            previous memory state vector
+        ls_m_i      -    [B x d] x (i-1)  list of previous memory vectors, --EXcluding-- current _m
         q           -    B x d            concatenation of the two final hidden states in biLSTM
         cws         -    B x d x S        contextual words from input unit, where S is the query length
         KB          -    B x d x H x W    knowledge base (image feature map for VQA)
@@ -258,12 +266,14 @@ class MACCell(nn.Module):
         """
         c_prev = ls_c_i[-1]
         c_i = self.control_unit(c_prev, q, cws)
-        ls_c_i.append(c_i)
 
+        m_prev = ls_m_i[-1]
         m_new = self.read_unit(m_prev, KB, c_i)
+#         print("M NEW:   ")
+#         print(torch.mean(torch.abs(m_new)))
 
-        _m = self.write_unit(m_new, m_prev, ls_c_i)
-        return ls_c_i, _m
+        ls_c_i, ls_m_i = self.write_unit(m_new, ls_m_i, c_i, ls_c_i)
+        return ls_c_i, ls_m_i
 
 # ## Testing
 # B = 2 # batch size
@@ -404,7 +414,7 @@ class OutputUnit(nn.Module):
 
         self.ac = nn.ELU()
         # Double check where to apply dropout, the paper did not state
-        self.dropout = nn.Dropout(p=0.85)
+        self.dropout = nn.Dropout(p=0.15)
         self.softmax = nn.Softmax(dim=1)
 
     def forward(self, q, mp):
@@ -417,8 +427,13 @@ class OutputUnit(nn.Module):
         ans         -    B x num_answers      softmax score over the answers
         """
         ans = torch.cat([q, mp], dim=1)
+#         print('q and mp: ', ans.data.squeeze().cpu().numpy().tolist())
         ans = self.dropout(self.ac(self.fc1(ans)))
-        ans = self.softmax(self.ac(self.fc2(ans)))
+#         print('Logit: ', self.ac(self.fc2(ans)))
+#         print("FC2 shape: ")
+#         print(self.fc2.weight.size())
+#         print(torch.sum(self.fc2.weight.data, dim=1))
+        ans = self.fc2(ans) # output logits, since nn.CrossEntropy Takes care of softmax
         return ans
 
 # ## Testing
@@ -471,7 +486,6 @@ class CAN(nn.Module):
         self.write_merge_transform = nn.Linear(2*d,d)
         self.write_self_attn = write_self_attn
         self.write_attn_weight = nn.Linear(d,1)
-        self.write_attn_merge = nn.Linear(2*d, d)
         self.write_mem_gate = write_mem_gate
         self.write_gate_transform = nn.Linear(d,d)
         write_params = {
@@ -479,7 +493,6 @@ class CAN(nn.Module):
             'merge_transform':self.write_merge_transform,
             'self_attn':self.write_self_attn,
             'attn_weight':self.write_attn_weight,
-            'attn_merge':self.write_attn_merge,
             'mem_gate':self.write_mem_gate,
             'gate_transform':self.write_gate_transform,
         }
@@ -490,12 +503,12 @@ class CAN(nn.Module):
 
     def _init_states(self, B):
         if cfgs.USE_CUDA:
-            ls_c_i = [Variable(torch.rand(B,self.d)).cuda()]
-            _m = Variable(torch.rand(B,self.d)).cuda()
+            ls_c_i = [Variable(torch.zeros(B,self.d)).cuda()]
+            ls_m_i = [Variable(torch.zeros(B,self.d)).cuda()]
         else:
-            ls_c_i = [Variable(torch.rand(B,self.d))]
-            _m = Variable(torch.rand(B,self.d))
-        return ls_c_i, _m
+            ls_c_i = [Variable(torch.zeros(B,self.d))]
+            ls_m_i = [Variable(torch.zeros(B,self.d))]
+        return ls_c_i, ls_m_i
 
     def forward(self, img_feats, question):
         """
@@ -507,10 +520,14 @@ class CAN(nn.Module):
         ans         -    B x num_answers      softmax score over the answers
         """
         q, cws, KB = self.input_unit(img_feats, question)
-        ls_c_i, _m = self._init_states(q.size(0))
+        ls_c_i, ls_m_i = self._init_states(q.size(0))
         for mac in self.MACCells:
-            ls_c_i, _m = mac(ls_c_i, _m, q, cws, KB)
-        ans = self.output_unit(q, _m)
+            ls_c_i, ls_m_i = mac(ls_c_i, ls_m_i, q, cws, KB)
+#         print("Last ctrl: ")
+#         print(ls_c_i[-1].data.squeeze().cpu().numpy().tolist())
+#         print("Last mem: ")
+#         print(ls_m_i[-1].data.squeeze().cpu().numpy().tolist())
+        ans = self.output_unit(q, ls_m_i[-1])
         return ans
 
 # ## Testing
