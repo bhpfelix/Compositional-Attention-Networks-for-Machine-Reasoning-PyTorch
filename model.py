@@ -162,7 +162,7 @@ class WriteUnit(nn.Module):
         attn_weight        -    shared W^{d,1} and b^1 that calculate attentional weights (Section 3.2.3 Eq.(9a))
 
         mem_gate           -    boolean flag for memory gate variant
-        gate_transform     -    shared W^{d,d} and b^d that transforms c_i in to _c_i for gating purpose
+        gate_transform     -    shared W^{d,d} (W^{d,d} in paper?) and b^d that transforms c_i in to _c_i for gating purpose
         """
         super(WriteUnit, self).__init__()
         self.d = d
