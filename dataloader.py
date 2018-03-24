@@ -7,7 +7,7 @@ from torch.utils.data import Dataset, DataLoader
 
 import configs as cfgs
 
-class CLEVRDataset(Dataset):
+class CLEVRDatasetOld(Dataset):
     def __init__(self, feature_h5, question_json, glove_json, answer_json, corpus, d_pos_vec):
         """
         Image features are extracted according to:
@@ -34,6 +34,7 @@ class CLEVRDataset(Dataset):
         # According to FiLM, not including "?" sign, but include ";"
         _q = q.lower().replace('?','').replace(';',' ;') # pad space for split
         return np.array([self.glove[w][self.corpus] for w in _q.split()])
+        
 
     def position_encoding(self, n_position):
         '''
@@ -70,13 +71,40 @@ class CLEVRDataset(Dataset):
 
         return img_feats, question, answer
 
+    
+class CLEVRDataset(Dataset):
+    def __init__(self, feature_h5, question_h5):
+        """
+        Image features are extracted according to:
+        https://github.com/ethanjperez/film/blob/master/scripts/extract_features.py
+        """
+        print('Loading data...')
+        f1 = h5py.File(feature_h5, 'r')
+        self.image_features = f1['features']
+        f2 = h5py.File(question_h5, 'r')
+        self.questions = f2['questions']
+        self.img_idx = f2['image_idxs']
+        self.answer = f2['answer']
+        print('Done')
+
+    def __len__(self):
+        return len(self.questions)
+
+    def __getitem__(self, index):
+        question = self.questions[str(index)][:]
+        answer = self.answer[index].tolist()
+        img_feats = self.image_features[self.img_idx[index]]
+
+        return img_feats, question, answer
+    
+    
 def collate_fn(data):
     """Creates mini-batch tensors from the list of tuples (img_feats, question, answer).
-
-    We should build custom collate_fn rather than using default collate_fn,
+    
+    We should build custom collate_fn rather than using default collate_fn, 
     because merging question (including padding) is not supported in default.
     Args:
-        data: list of tuple (img_feats, question, answer).
+        data: list of tuple (img_feats, question, answer). 
             - img_feats: torch tensor of shape (C, H, W).
             - question: torch tensor of shape (S, 300); variable length S.
             - answer: int
@@ -94,32 +122,30 @@ def collate_fn(data):
     im_batch = torch.stack([torch.Tensor(feat).float() for feat in img_feats], 0)
     a_batch = torch.Tensor(answer)
 
-    # Merge captions (from tuple of 2D tensor to 3D tensor).
+    # Merge questions (from tuple of 2D tensor to 3D tensor).
     lengths = [q.shape[0] for q in question]
-    q_batch = torch.zeros(len(question), max(lengths), question[0].shape[1]+1).float() # +1 for padding channel
+    q_batch = torch.ones(len(question), max(lengths)) * cfgs.VOCAB_SIZE # +1 for padding channel, -1 for 0 indexing
     for i, q in enumerate(question):
-        q_batch[i, :lengths[i], :-1] = torch.Tensor(q).float()
-        if lengths[i] < max(lengths):
-            q_batch[i, lengths[i]:, -1] = 1.
-    return im_batch, q_batch, a_batch # , lengths
+        q_batch[i, :lengths[i]] = torch.Tensor(q)
+    return im_batch, q_batch, a_batch, lengths
 
-train_dataset = CLEVRDataset(
-    feature_h5=cfgs.TRAIN_IM_FEATS,
-    question_json=cfgs.TRAIN_QUESTION,
-    glove_json=cfgs.GLOVE_PATH,
-    answer_json=cfgs.ANSWER_PATH,
-    corpus=cfgs.CORPUS,
-    d_pos_vec=cfgs.D_POS_VEC
-)
+# train_dataset = CLEVRDataset(
+#     feature_h5=cfgs.TRAIN_IM_FEATS,
+#     question_json=cfgs.TRAIN_QUESTION,
+#     glove_json=cfgs.GLOVE_PATH,
+#     answer_json=cfgs.ANSWER_PATH,
+#     corpus=cfgs.CORPUS,
+#     d_pos_vec=cfgs.D_POS_VEC
+# )
 
-val_dataset = CLEVRDataset(
-    feature_h5=cfgs.VAL_IM_FEATS,
-    question_json=cfgs.VAL_QUESTION,
-    glove_json=cfgs.GLOVE_PATH,
-    answer_json=cfgs.ANSWER_PATH,
-    corpus=cfgs.CORPUS,
-    d_pos_vec=cfgs.D_POS_VEC
-)
+# val_dataset = CLEVRDataset(
+#     feature_h5=cfgs.VAL_IM_FEATS,
+#     question_json=cfgs.VAL_QUESTION,
+#     glove_json=cfgs.GLOVE_PATH,
+#     answer_json=cfgs.ANSWER_PATH,
+#     corpus=cfgs.CORPUS,
+#     d_pos_vec=cfgs.D_POS_VEC
+# )
 
 ## Example Usage
 # img_feats, question, answer = dataset[0]
@@ -127,6 +153,21 @@ val_dataset = CLEVRDataset(
 # print(question.shape)
 # print(answer)
 
-train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=cfgs.BATCH_SIZE, shuffle=True, collate_fn=collate_fn) #
+train_dataset = CLEVRDataset(
+    feature_h5=cfgs.TRAIN_IM_FEATS,
+    question_h5=cfgs.TRAIN_QUESTION,
+)
+
+val_dataset = CLEVRDataset(
+    feature_h5=cfgs.VAL_IM_FEATS,
+    question_h5=cfgs.VAL_QUESTION,
+)
+
+train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=cfgs.BATCH_SIZE, shuffle=True, collate_fn=collate_fn) # 
 val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=cfgs.BATCH_SIZE, collate_fn=collate_fn)
 
+# btch = [train_dataset[i] for i in range(4)]
+# im_batch, q_batch, a_batch, lengths = collate_fn(btch)
+# print(q_batch)
+# print(a_batch)
+# print(lengths)
