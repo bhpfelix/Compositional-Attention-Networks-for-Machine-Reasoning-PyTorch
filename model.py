@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd import Variable
+from torch.nn.utils.rnn import pad_packed_sequence, pack_padded_sequence
 
 import configs as cfgs
 
@@ -153,16 +154,17 @@ class ReadUnit(nn.Module):
 
 class WriteUnit(nn.Module):
 
-    def __init__(self, d, merge_transform, self_attn=False, attn_weight=None, mem_gate=False, gate_transform=None):
+    def __init__(self, d, merge_transform, self_attn=False, attn_weight=None, attn_merge=None, mem_gate=False, gate_transform=None):
         """
         Input:
-        merge_transform    -    shared W^{2d,d} and b^d that transforms concatenated memory vec [m_new; m_prev] into m (Section 3.2.3 Eq.(8) or Section 3.2.3 Eq.(10) if self_attn is True)
+        merge_transform    -    shared W^{2d,d} and b^d that transforms concatenated memory vec [m_new; m_prev] into m (Section 3.2.3 Eq.(8))
 
         self_attn          -    boolean flag for self attention variant
         attn_weight        -    shared W^{d,1} and b^1 that calculate attentional weights (Section 3.2.3 Eq.(9a))
+        attn_merge         -    shared W^{2d,d} and b^d that transforms concatenated memory vec [m_sa; _m] into _m (Section 3.2.3 Eq.(10) if self_attn is True)
 
         mem_gate           -    boolean flag for memory gate variant
-        gate_transform     -    shared W^{d,d} (W^{d,d} in paper?) and b^d that transforms c_i in to _c_i for gating purpose
+        gate_transform     -    shared W^{d,d} (W^{d,1} in paper?) and b^d that transforms c_i in to _c_i for gating purpose
         """
         super(WriteUnit, self).__init__()
         self.d = d
@@ -170,10 +172,11 @@ class WriteUnit(nn.Module):
 
         self.self_attn = self_attn
         self.attn_weight = attn_weight
+        self.attn_merge = attn_merge
 
         self.mem_gate = mem_gate
         self.gate_transform = gate_transform
-
+        
         self.softmax = nn.Softmax(dim=1)
 
     def forward(self, m_new, ls_m_i, c_i, ls_c_i):
@@ -189,6 +192,7 @@ class WriteUnit(nn.Module):
         ls_c_i      -    [B x d] x (i-1)      list of control vectors, including current c_i
         """
         m_prev = ls_m_i[-1]
+        _m = self.merge_transform(torch.cat([m_new, m_prev], dim=1))
 
         if self.self_attn:
             m_prevs = torch.stack(ls_m_i, dim=2)
@@ -198,9 +202,7 @@ class WriteUnit(nn.Module):
             sa = self.softmax(self.attn_weight(sa).view(c_i.size(0), -1)).unsqueeze(1) # B x 1 x (i-1)
             m_sa = torch.sum(sa * m_prevs, dim=2)
             # incoporating new info with old info
-            _m = self.merge_transform(torch.cat([m_new, m_sa], dim=1))
-        else:
-            _m = self.merge_transform(torch.cat([m_new, m_prev], dim=1))
+            _m = self.attn_merge(torch.cat([m_sa, _m], dim=1))  
 
         if self.mem_gate:
             _c_i = torch.sigmoid(self.gate_transform(c_i))
@@ -208,7 +210,7 @@ class WriteUnit(nn.Module):
 
         ls_c_i.append(c_i)
         ls_m_i.append(_m)
-
+        
         return ls_c_i, ls_m_i
 
 # ## Testing
@@ -335,7 +337,7 @@ class MACCell(nn.Module):
 
 class InputUnit(nn.Module):
 
-    def __init__(self, d, in_channels, hidden_channels=None):
+    def __init__(self, d, vocab_size, embedding_dim, in_channels, hidden_channels=None):
         """
         Input:
         in_channels          -    image feature input channels
@@ -345,12 +347,9 @@ class InputUnit(nn.Module):
         if d%2 == 1:
             raise ValueError('d needs to be an even integer')
         self.d = d
-        self.lstm = nn.LSTM(
-                input_size = 300 + 1, # GloVe dimension + padding channel (Double check how to handdle variable length input)
-                hidden_size = d // 2,
-                num_layers = 1,
-                bidirectional = True,
-            )
+        self.char_embeds = nn.Embedding(vocab_size, embedding_dim)
+        self.lstm = nn.LSTM(embedding_dim, d // 2, num_layers=1, bidirectional = True)
+        
         if hidden_channels is None:
             hidden_channels = (in_channels + d) // 2
         self.conv1 = nn.Conv2d(in_channels, hidden_channels, 2, padding=1) # Use 1 padding here to keep the dimension
@@ -358,23 +357,27 @@ class InputUnit(nn.Module):
 
         self.ac = nn.ELU()
 
-    def forward(self, img_feats, question):
+    def forward(self, img_feats, questions, lengths):
         """
         Input:
         img_feats      -    B x (C+2*Pd) x H x W       image feature maps, where C is 1024 (ResNet101 conv4 output feature map number), and Pd is positional encoding dimension
-        question       -    B x S x (300+1)                question in 300 dimensional GloVe embedding, where S is the query length
-
+        questions      -    B x S x (300+1)            question in 300 dimensional GloVe embedding, where S is the query length
+        lengths        -    B                          list of B elements, holding length of input questions before padding    
 
         Return:
         q           -    B x d            concatenation of the two final hidden states in biLSTM
         cws         -    B x d x S        contextual words from input unit, where S is the query length
         KB          -    B x d x H x W    knowledge base (image feature map for VQA)
         """
-        B = question.size(0)
-        out, (h_t, c_t) = self.lstm(question.permute(1,0,2))
+        B = questions.size(0)
+        embeds = self.char_embeds(questions) 
+        packed_input = pack_padded_sequence(embeds.permute(1,0,2), lengths) 
+        packed_output, (h_t, c_t) = self.lstm(packed_input) 
+        lstm_out, _ = pad_packed_sequence(packed_output)
+        
         # must call .contiguous() because the tensor is not a single block of memory, but a block with holes. view can be only used with contiguous tensors.
         q = h_t.permute(1,0,2).contiguous().view(B, -1)
-        cws = out.permute(1,2,0)
+        cws = lstm_out.permute(1,2,0) # Figure 8
 
         KB = self.ac(self.conv1(img_feats))
         KB = self.ac(self.conv2(KB))
@@ -399,6 +402,54 @@ class InputUnit(nn.Module):
 # print KB.size()
 
 
+
+class VariationalDropout(nn.Module):
+    def __init__(self, alpha=1.0, dim=None):
+        super(VariationalDropout, self).__init__()
+        
+        self.dim = dim
+        self.max_alpha = alpha
+        # Initial alpha
+        log_alpha = (torch.ones(dim) * alpha).log()
+        self.log_alpha = nn.Parameter(log_alpha)
+        
+    def kl(self):
+        c1 = 1.16145124
+        c2 = -1.50204118
+        c3 = 0.58629921
+        
+        alpha = self.log_alpha.exp()
+        
+        negative_kl = 0.5 * self.log_alpha + c1 * alpha + c2 * alpha**2 + c3 * alpha**3
+        
+        kl = -negative_kl
+        
+        return kl.mean()
+    
+    def forward(self, x):
+        """
+        Sample noise   e ~ N(1, alpha)
+        Multiply noise h = h_ * e
+        """
+        if self.train():
+            # N(0,1)
+            epsilon = Variable(torch.randn(x.size()))
+            if x.is_cuda:
+                epsilon = epsilon.cuda()
+
+            # Clip alpha
+            self.log_alpha.data = torch.clamp(self.log_alpha.data, max=self.max_alpha)
+            alpha = self.log_alpha.exp()
+
+            # N(1, alpha)
+            epsilon = epsilon * alpha
+
+            return x * epsilon
+        else:
+            return x
+        
+
+
 class OutputUnit(nn.Module):
 
     def __init__(self, d, num_answers=28, hidden_size=None):
@@ -413,8 +464,10 @@ class OutputUnit(nn.Module):
         self.fc2 = nn.Linear(hidden_size, num_answers)
 
         self.ac = nn.ELU()
-        # Double check where to apply dropout, the paper did not state
+        # Double check where to apply dropout, also what kinds of dropout to apply
         self.dropout = nn.Dropout(p=0.15)
+#         self.dropout = nn.AlphaDropout(p=0.15)
+#         self.dropout = VariationalDropout(alpha=(0.15/0.85), dim=hidden_size)
         self.softmax = nn.Softmax(dim=1)
 
     def forward(self, q, mp):
@@ -450,7 +503,7 @@ class OutputUnit(nn.Module):
 
 class CAN(nn.Module):
 
-    def __init__(self, d, input_in_channels, input_hidden_channels=None, p=12, write_self_attn=True, write_mem_gate=True, num_answers=28, out_hidden_size=None):
+    def __init__(self, d, vocab_size, embedding_dim, input_in_channels, input_hidden_channels=None, p=12, write_self_attn=True, write_mem_gate=True, num_answers=28, out_hidden_size=None):
         """
         Compositional Attention Network
 
@@ -461,7 +514,7 @@ class CAN(nn.Module):
         super(CAN, self).__init__()
         self.d = d
 
-        self.input_unit = InputUnit(d, input_in_channels, input_hidden_channels)
+        self.input_unit = InputUnit(d, vocab_size, embedding_dim, input_in_channels, input_hidden_channels)
 
         self.ctrl_transform = nn.Linear(2*d, d)
         self.ctrl_attn_weight = nn.Linear(d, 1)
@@ -486,13 +539,15 @@ class CAN(nn.Module):
         self.write_merge_transform = nn.Linear(2*d,d)
         self.write_self_attn = write_self_attn
         self.write_attn_weight = nn.Linear(d,1)
+        self.write_attn_merge = nn.Linear(2*d,d)
         self.write_mem_gate = write_mem_gate
-        self.write_gate_transform = nn.Linear(d,d)
+        self.write_gate_transform = nn.Linear(d,1) # nn.Linear(d,d)
         write_params = {
             'd':d,
             'merge_transform':self.write_merge_transform,
             'self_attn':self.write_self_attn,
             'attn_weight':self.write_attn_weight,
+            'attn_merge':self.write_attn_merge,
             'mem_gate':self.write_mem_gate,
             'gate_transform':self.write_gate_transform,
         }
@@ -510,7 +565,7 @@ class CAN(nn.Module):
             ls_m_i = [Variable(torch.zeros(B,self.d))]
         return ls_c_i, ls_m_i
 
-    def forward(self, img_feats, question):
+    def forward(self, img_feats, question, lengths):
         """
         Input:
         img_feats      -    B x (C+2*Pd) x H x W       image feature maps, where C is 1024 (ResNet101 conv4 output feature map number), and Pd is positional encoding dimension
@@ -519,7 +574,7 @@ class CAN(nn.Module):
         Return:
         ans         -    B x num_answers      softmax score over the answers
         """
-        q, cws, KB = self.input_unit(img_feats, question)
+        q, cws, KB = self.input_unit(img_feats, question, lengths)
         ls_c_i, ls_m_i = self._init_states(q.size(0))
         for mac in self.MACCells:
             ls_c_i, ls_m_i = mac(ls_c_i, ls_m_i, q, cws, KB)
