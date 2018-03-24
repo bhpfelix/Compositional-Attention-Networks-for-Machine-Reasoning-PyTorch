@@ -58,31 +58,6 @@ class ControlUnit(nn.Module):
 
         return c_i
 
-# ## Testing
-# B = 2 # batch size
-# d = 6 # dimension
-# S = 5 # seq length
-# lstm = nn.LSTM(
-#         input_size = 1,
-#         hidden_size = d // 2,
-#         num_layers = 1,
-#         bidirectional = True,
-#     )
-
-# inpt = Variable( torch.rand(S, B, 1) )
-# out, (h_t, c_t) = lstm(inpt)
-
-# # must call .contiguous() because the tensor is not a single block of memory, but a block with holes. view can be only used with contiguous tensors.
-# q = h_t.permute(1,0,2).contiguous().view(B, -1)
-# cws = out.permute(1,2,0)
-# transform = nn.Linear(2*d, d)
-# attn_weight = nn.Linear(d, 1)
-# c_prev = Variable( torch.rand(B, d) )
-
-# model = ControlUnit(d, transform, attn_weight)
-# c_i = model(c_prev, q, cws)
-# print c_i.size()
-
 
 class ReadUnit(nn.Module):
 
@@ -127,30 +102,11 @@ class ReadUnit(nn.Module):
         I = c_i.unsqueeze(1).unsqueeze(1) * _I
 
         mv = self.softmax(self.attn_weight(I.view(-1, self.d)).view(B, -1)).view(B, H, W, 1)
-#         print("mv sum: ")
-#         print(torch.sum(mv))
 
         m_new = mv * KB_perm
         m_new = torch.sum(m_new.view(B,-1,d), dim=1) # anchor on knowledge base
         return m_new
 
-# ## Testing
-# B = 2
-# d = 6
-# H, W = 14, 14
-# m_prev_transform = nn.Linear(d,d)
-# KB_transform = nn.Linear(d,d)
-# merge_transform = nn.Linear(2*d,d)
-# attn_weight = nn.Linear(d,1)
-
-# model = ReadUnit(d, m_prev_transform, KB_transform, merge_transform, attn_weight)
-
-# m_prev = Variable(torch.rand(B,d))
-# KB = Variable(torch.rand(B,d,H,W))
-# c_i = Variable(torch.rand(B,d))
-
-# m_new = model(m_prev, KB, c_i)
-# print m_new.size()
 
 class WriteUnit(nn.Module):
 
@@ -176,7 +132,7 @@ class WriteUnit(nn.Module):
 
         self.mem_gate = mem_gate
         self.gate_transform = gate_transform
-        
+
         self.softmax = nn.Softmax(dim=1)
 
     def forward(self, m_new, ls_m_i, c_i, ls_c_i):
@@ -202,7 +158,7 @@ class WriteUnit(nn.Module):
             sa = self.softmax(self.attn_weight(sa).view(c_i.size(0), -1)).unsqueeze(1) # B x 1 x (i-1)
             m_sa = torch.sum(sa * m_prevs, dim=2)
             # incoporating new info with old info
-            _m = self.attn_merge(torch.cat([m_sa, _m], dim=1))  
+            _m = self.attn_merge(torch.cat([m_sa, _m], dim=1))
 
         if self.mem_gate:
             _c_i = torch.sigmoid(self.gate_transform(c_i))
@@ -210,29 +166,8 @@ class WriteUnit(nn.Module):
 
         ls_c_i.append(c_i)
         ls_m_i.append(_m)
-        
+
         return ls_c_i, ls_m_i
-
-# ## Testing
-# B = 2
-# d = 6
-# merge_transform = nn.Linear(2*d,d)
-
-# self_attn = True # False #
-# attn_weight = nn.Linear(d,1)
-# attn_merge = nn.Linear(2*d, d)
-
-# mem_gate = True # False #
-# gate_transform = nn.Linear(d,d)
-
-# model = WriteUnit(d, merge_transform, self_attn, attn_weight, attn_merge, mem_gate, gate_transform)
-
-# m_new = Variable(torch.rand(B,d))
-# m_prev = Variable(torch.rand(B,d))
-# ls_c_i = [Variable(torch.rand(B,d)) for _ in range(10)]
-
-# m = model(m_new, m_prev, ls_c_i)
-# print m.size()
 
 
 class MACCell(nn.Module):
@@ -271,68 +206,9 @@ class MACCell(nn.Module):
 
         m_prev = ls_m_i[-1]
         m_new = self.read_unit(m_prev, KB, c_i)
-#         print("M NEW:   ")
-#         print(torch.mean(torch.abs(m_new)))
 
         ls_c_i, ls_m_i = self.write_unit(m_new, ls_m_i, c_i, ls_c_i)
         return ls_c_i, ls_m_i
-
-# ## Testing
-# B = 2 # batch size
-# d = 6 # dimension
-# S = 5 # seq length
-# H, W = 14, 14
-
-# lstm = nn.LSTM(
-#         input_size = 1,
-#         hidden_size = d // 2,
-#         num_layers = 1,
-#         bidirectional = True,
-#     )
-
-# inpt = Variable( torch.rand(S, B, 1) )
-# out, (h_t, c_t) = lstm(inpt)
-
-# # must call .contiguous() because the tensor is not a single block of memory, but a block with holes. view can be only used with contiguous tensors.
-# q = h_t.permute(1,0,2).contiguous().view(B, -1)
-# cws = out.permute(1,2,0)
-
-# ls_c_i = [Variable(torch.rand(B,d)) for _ in range(10)]
-# m_prev = Variable(torch.rand(B,d))
-
-# KB = Variable(torch.rand(B,d,H,W))
-
-# ctrl_params = {
-#     'd':d,
-#     'transform':nn.Linear(2*d, d),
-#     'attn_weight':nn.Linear(d, 1),
-# }
-
-# read_params = {
-#     'd':d,
-#     'm_prev_transform':nn.Linear(d,d),
-#     'KB_transform':nn.Linear(d,d),
-#     'merge_transform':nn.Linear(2*d,d),
-#     'attn_weight':nn.Linear(d,1),
-# }
-
-# write_params = {
-#     'd':d,
-#     'merge_transform':nn.Linear(2*d,d),
-#     'self_attn':True,
-#     'attn_weight':nn.Linear(d,1),
-#     'attn_merge':nn.Linear(2*d, d),
-#     'mem_gate':True,
-#     'gate_transform':nn.Linear(d,d),
-# }
-
-# model = MACCell(d, ctrl_params, read_params, write_params)
-# ls_c_i, _m = model(ls_c_i, m_prev, q, cws, KB)
-
-# print len(ls_c_i)
-# for item in ls_c_i:
-#     print item.size()
-# print _m.size()
 
 
 class InputUnit(nn.Module):
@@ -349,7 +225,7 @@ class InputUnit(nn.Module):
         self.d = d
         self.char_embeds = nn.Embedding(vocab_size, embedding_dim)
         self.lstm = nn.LSTM(embedding_dim, d // 2, num_layers=1, bidirectional = True)
-        
+
         if hidden_channels is None:
             hidden_channels = (in_channels + d) // 2
         self.conv1 = nn.Conv2d(in_channels, hidden_channels, 2, padding=1) # Use 1 padding here to keep the dimension
@@ -362,7 +238,7 @@ class InputUnit(nn.Module):
         Input:
         img_feats      -    B x (C+2*Pd) x H x W       image feature maps, where C is 1024 (ResNet101 conv4 output feature map number), and Pd is positional encoding dimension
         questions      -    B x S x (300+1)            question in 300 dimensional GloVe embedding, where S is the query length
-        lengths        -    B                          list of B elements, holding length of input questions before padding    
+        lengths        -    B                          list of B elements, holding length of input questions before padding
 
         Return:
         q           -    B x d            concatenation of the two final hidden states in biLSTM
@@ -370,11 +246,11 @@ class InputUnit(nn.Module):
         KB          -    B x d x H x W    knowledge base (image feature map for VQA)
         """
         B = questions.size(0)
-        embeds = self.char_embeds(questions) 
-        packed_input = pack_padded_sequence(embeds.permute(1,0,2), lengths) 
-        packed_output, (h_t, c_t) = self.lstm(packed_input) 
+        embeds = self.char_embeds(questions)
+        packed_input = pack_padded_sequence(embeds.permute(1,0,2), lengths)
+        packed_output, (h_t, c_t) = self.lstm(packed_input)
         lstm_out, _ = pad_packed_sequence(packed_output)
-        
+
         # must call .contiguous() because the tensor is not a single block of memory, but a block with holes. view can be only used with contiguous tensors.
         q = h_t.permute(1,0,2).contiguous().view(B, -1)
         cws = lstm_out.permute(1,2,0) # Figure 8
@@ -384,48 +260,30 @@ class InputUnit(nn.Module):
 
         return q, cws, KB
 
-# ## Testing
-# B = 2
-# d = 6
-# H, W = 14, 14
-# S = 5
-# in_channels = 1280
-# hidden_channels = (in_channels + d) // 2
-
-# img_feats = Variable( torch.rand(B, in_channels, H, W) )
-# question = Variable( torch.rand(B, S, 300) )
-
-# model = InputUnit(d, in_channels, hidden_channels)
-# q, cws, KB = model(img_feats, question)
-# print q.size()
-# print cws.size()
-# print KB.size()
-
-
 
 class VariationalDropout(nn.Module):
     def __init__(self, alpha=1.0, dim=None):
         super(VariationalDropout, self).__init__()
-        
+
         self.dim = dim
         self.max_alpha = alpha
         # Initial alpha
         log_alpha = (torch.ones(dim) * alpha).log()
         self.log_alpha = nn.Parameter(log_alpha)
-        
+
     def kl(self):
         c1 = 1.16145124
         c2 = -1.50204118
         c3 = 0.58629921
-        
+
         alpha = self.log_alpha.exp()
-        
+
         negative_kl = 0.5 * self.log_alpha + c1 * alpha + c2 * alpha**2 + c3 * alpha**3
-        
+
         kl = -negative_kl
-        
+
         return kl.mean()
-    
+
     def forward(self, x):
         """
         Sample noise   e ~ N(1, alpha)
@@ -447,7 +305,6 @@ class VariationalDropout(nn.Module):
             return x * epsilon
         else:
             return x
-        
 
 
 class OutputUnit(nn.Module):
@@ -480,25 +337,9 @@ class OutputUnit(nn.Module):
         ans         -    B x num_answers      softmax score over the answers
         """
         ans = torch.cat([q, mp], dim=1)
-#         print('q and mp: ', ans.data.squeeze().cpu().numpy().tolist())
         ans = self.dropout(self.ac(self.fc1(ans)))
-#         print('Logit: ', self.ac(self.fc2(ans)))
-#         print("FC2 shape: ")
-#         print(self.fc2.weight.size())
-#         print(torch.sum(self.fc2.weight.data, dim=1))
         ans = self.fc2(ans) # output logits, since nn.CrossEntropy Takes care of softmax
         return ans
-
-# ## Testing
-# B = 2
-# d = 6
-
-# q = Variable(torch.rand(B,d))
-# mp = Variable(torch.rand(B,d))
-
-# model = OutputUnit(d)
-# ans = model(q, mp)
-# print ans.size()
 
 
 class CAN(nn.Module):
@@ -578,10 +419,6 @@ class CAN(nn.Module):
         ls_c_i, ls_m_i = self._init_states(q.size(0))
         for mac in self.MACCells:
             ls_c_i, ls_m_i = mac(ls_c_i, ls_m_i, q, cws, KB)
-#         print("Last ctrl: ")
-#         print(ls_c_i[-1].data.squeeze().cpu().numpy().tolist())
-#         print("Last mem: ")
-#         print(ls_m_i[-1].data.squeeze().cpu().numpy().tolist())
         ans = self.output_unit(q, ls_m_i[-1])
         return ans
 
