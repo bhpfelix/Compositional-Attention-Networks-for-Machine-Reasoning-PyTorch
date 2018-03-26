@@ -322,8 +322,8 @@ class OutputUnit(nn.Module):
 
         self.ac = nn.ELU()
         # Double check where to apply dropout, also what kinds of dropout to apply
-        self.dropout = nn.Dropout(p=0.15)
-#         self.dropout = nn.AlphaDropout(p=0.15)
+        # self.dropout = nn.Dropout(p=0.15)
+        self.dropout = nn.AlphaDropout(p=0.15)
 #         self.dropout = VariationalDropout(alpha=(0.15/0.85), dim=hidden_size)
         self.softmax = nn.Softmax(dim=1)
 

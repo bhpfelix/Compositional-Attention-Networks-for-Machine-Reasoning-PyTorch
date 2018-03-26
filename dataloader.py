@@ -44,7 +44,7 @@ def collate_fn(data):
             - answer: int
     Returns:
         im_batch: torch tensor of shape (batch_size, C, H, W).
-        q_batch: torch tensor of shape (batch_size, padded_length, 300+1).
+        q_batch: torch tensor of shape (batch_size, padded_length, 300).
         a_batch: torch tensor of shape (batch_size, 1).
         lengths: list; valid length for each padded question.
     """
