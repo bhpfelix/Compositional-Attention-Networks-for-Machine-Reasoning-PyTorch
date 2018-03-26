@@ -58,7 +58,7 @@ def collate_fn(data):
 
     # Merge questions and add paddings
     lengths = [q.shape[0] for q in question]
-    q_batch = torch.ones(len(question), max(lengths)) * cfgs.VOCAB_SIZE # +1 for padding channel, -1 for 0 indexing
+    q_batch = torch.ones(len(question), max(lengths)) * cfgs.VOCAB_SIZE # +1 for <NULL> padding, -1 for 0 indexing
     for i, q in enumerate(question):
         q_batch[i, :lengths[i]] = torch.Tensor(q)
     return im_batch, q_batch, a_batch, lengths

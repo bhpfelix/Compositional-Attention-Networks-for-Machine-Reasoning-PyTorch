@@ -5,4 +5,4 @@ This is a PyTorch implementation of the Compositional Attention Network architec
 for machine reasoning." *International Conference on
 Learning Representations*, 2018.](https://arxiv.org/abs/1803.03067)
 
-This implementation is focused on exploring and re-producing the general characteristics of the architecture. 
+This implementation is focused on exploring and re-producing the general characteristics of the architecture.
